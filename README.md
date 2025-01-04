@@ -1,16 +1,63 @@
-# wallpaper_changer
+# Ravi - Otomatik Duvar Kağıdı Değiştirici
 
-A new Flutter project.
+Ravi, Android cihazınızın kilit ekranı duvar kağıdını otomatik olarak değiştiren şık ve basit bir uygulamadır.
 
-## Getting Started
+## Özellikler
 
-This project is a starting point for a Flutter application.
+- **Otomatik Değişim**: Ekranınızı her kapattığınızda, bir sonraki açılışta sizi yeni bir duvar kağıdı karşılar
+- **Tam Ekran Uyumluluk**: Tüm duvar kağıtları ekranınıza mükemmel şekilde uyum sağlar
+- **Arka Planda Sessiz Çalışma**: Bildirim çubuğunda görünmeden, sessizce çalışır
+- **Pil Dostu**: Optimize edilmiş kod yapısı sayesinde minimum pil tüketimi
+- **15 Farklı Duvar Kağıdı**: Özenle seçilmiş 15 farklı duvar kağıdı içerir
 
-A few resources to get you started if this is your first Flutter project:
+## Kullanım
 
-- [Lab: Write your first Flutter app](https://docs.flutter.dev/get-started/codelab)
-- [Cookbook: Useful Flutter samples](https://docs.flutter.dev/cookbook)
+1. Uygulamayı açın
+2. "Aktifleştir" butonuna basın
+3. Ekranınızı kapatıp açın
+4. Her ekran açılışında farklı bir duvar kağıdıyla karşılaşın
+5. Durdurmak istediğinizde "Devre Dışı Bırak" butonuna basın
 
-For help getting started with Flutter development, view the
-[online documentation](https://docs.flutter.dev/), which offers tutorials,
-samples, guidance on mobile development, and a full API reference.
+## Teknik Özellikler
+
+- Flutter ile geliştirilmiş modern UI
+- Kotlin ile yazılmış native Android servisi
+- Foreground servis ile kesintisiz çalışma
+- Otomatik başlatma desteği
+- Ekran durumu izleme
+- Optimize edilmiş görüntü işleme
+
+## Gereksinimler
+
+- Android 5.0 ve üzeri
+- Minimum 50MB boş alan
+- Gerekli izinler:
+  - Duvar kağıdını değiştirme
+  - Arka planda çalışma
+  - Otomatik başlatma
+
+## Güncelleme Geçmişi
+
+### v1.0.0
+- İlk sürüm
+- 15 yeni duvar kağıdı eklendi
+- Otomatik değişim özelliği
+- Bildirim olmadan çalışma
+- Tam ekran duvar kağıdı desteği
+
+## Katkıda Bulunma
+
+Projeye katkıda bulunmak için:
+1. Bu repository'yi fork edin
+2. Yeni bir branch oluşturun (`git checkout -b yeni-ozellik`)
+3. Değişikliklerinizi commit edin (`git commit -m 'Yeni özellik eklendi'`)
+4. Branch'inizi push edin (`git push origin yeni-ozellik`)
+5. Pull Request oluşturun
+
+## Lisans
+
+Bu proje MIT lisansı altında lisanslanmıştır. Daha fazla bilgi için [LICENSE](LICENSE) dosyasına bakın.
+
+## Geliştirici
+
+Said Bay - [GitHub](https://github.com/said-bay)
