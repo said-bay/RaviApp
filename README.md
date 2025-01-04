@@ -45,19 +45,10 @@ Ravi, Android cihazınızın kilit ekranı duvar kağıdını otomatik olarak de
 - Bildirim olmadan çalışma
 - Tam ekran duvar kağıdı desteği
 
-## Katkıda Bulunma
-
-Projeye katkıda bulunmak için:
-1. Bu repository'yi fork edin
-2. Yeni bir branch oluşturun (`git checkout -b yeni-ozellik`)
-3. Değişikliklerinizi commit edin (`git commit -m 'Yeni özellik eklendi'`)
-4. Branch'inizi push edin (`git push origin yeni-ozellik`)
-5. Pull Request oluşturun
-
 ## Lisans
 
-Bu proje MIT lisansı altında lisanslanmıştır. Daha fazla bilgi için [LICENSE](LICENSE) dosyasına bakın.
+Bu proje MIT lisansı altında lisanslanmıştır. Detaylı bilgi için [LICENSE](LICENSE) dosyasına bakabilirsiniz.
 
 ## Geliştirici
 
-Said Bay - [GitHub](https://github.com/said-bay)
+Ahmet Said BAY - [GitHub](https://github.com/said-bay)
