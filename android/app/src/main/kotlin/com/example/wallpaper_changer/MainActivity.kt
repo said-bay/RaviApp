@@ -15,11 +15,11 @@ import java.io.File
 class MainActivity: FlutterActivity() {
     private val SCREEN_STATE_CHANNEL = "com.example.wallpaper_changer/screen_state"
     private val WALLPAPER_CHANNEL = "com.example.wallpaper_changer/wallpaper"
+    private val SERVICE_CHANNEL = "com.example.wallpaper_changer/service"
     private var screenStateReceiver: ScreenStateReceiver? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        startService()
     }
 
     private fun startService() {
@@ -80,6 +80,29 @@ class MainActivity: FlutterActivity() {
                     }
                 }
                 else -> result.notImplemented()
+            }
+        }
+
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, SERVICE_CHANNEL).setMethodCallHandler { call, result ->
+            when (call.method) {
+                "startService" -> {
+                    val intent = Intent(this, WallpaperService::class.java)
+                    startService(intent)
+                    result.success(null)
+                }
+                "stopService" -> {
+                    val intent = Intent(this, WallpaperService::class.java).apply {
+                        action = WallpaperService.ACTION_STOP_SERVICE
+                    }
+                    startService(intent)
+                    result.success(null)
+                }
+                "isServiceRunning" -> {
+                    result.success(WallpaperService.isServiceRunning)
+                }
+                else -> {
+                    result.notImplemented()
+                }
             }
         }
     }

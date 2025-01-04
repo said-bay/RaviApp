@@ -7,21 +7,22 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.os.*
 import android.app.WallpaperManager
+import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.graphics.Color
 import android.util.Log
+import java.io.ByteArrayInputStream
+import androidx.core.app.NotificationCompat
 
 class WallpaperService : Service() {
-    private var screenReceiver: BroadcastReceiver? = null
     private var wakeLock: PowerManager.WakeLock? = null
-    private var isServiceRunning = false
     private val handler = Handler(Looper.getMainLooper())
     private val wallpaperRunnable = object : Runnable {
         override fun run() {
-            val shouldRunWallpaper = isServiceRunning
+            val shouldRunWallpaper = Companion.isServiceRunning
             if (shouldRunWallpaper) {
                 changeWallpaper()
                 handler.postDelayed(this, 15 * 60 * 1000) // 15 dakika
@@ -29,50 +30,88 @@ class WallpaperService : Service() {
         }
     }
 
+    private var screenStateReceiver: BroadcastReceiver? = null
+
     override fun onCreate() {
         super.onCreate()
-        Log.d(TAG, "Service onCreate")
-        startServiceWithNotification()
+        Log.d(Companion.TAG, "Service onCreate")
+        // Başlangıçta servis durumunu false yap
+        Companion.isServiceRunning = false
+        registerScreenStateReceiver()
     }
 
-    private fun startServiceWithNotification() {
-        Log.d(TAG, "Starting service with notification")
-        isServiceRunning = true
-        startForeground(NOTIFICATION_ID, createNotification())
+    private fun startService() {
+        Log.d(Companion.TAG, "Starting service")
+        Companion.isServiceRunning = true
         acquireWakeLock()
-        registerScreenReceiver()
         handler.post(wallpaperRunnable)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        Log.d(TAG, "Service onStartCommand")
-        val shouldStartService = !isServiceRunning
-        if (shouldStartService) {
-            startServiceWithNotification()
+        Log.d(Companion.TAG, "Service onStartCommand")
+        
+        when (intent?.action) {
+            Companion.ACTION_STOP_SERVICE -> {
+                Log.d(Companion.TAG, "Stopping service")
+                unregisterScreenStateReceiver()
+                stopSelf()
+                Companion.isServiceRunning = false
+                return START_NOT_STICKY
+            }
+            else -> {
+                if (!Companion.isServiceRunning) {
+                    startService()
+                    registerScreenStateReceiver()
+                    Companion.isServiceRunning = true
+                }
+            }
         }
-        return START_REDELIVER_INTENT
+        
+        // Servisin otomatik olarak yeniden başlatılmasını sağla
+        return START_STICKY
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {
         super.onTaskRemoved(rootIntent)
-        Log.d(TAG, "Service onTaskRemoved - restarting service")
+        Log.d(Companion.TAG, "Service onTaskRemoved - restarting service")
+        
+        // Uygulama kapatıldığında servisi yeniden başlat
         val restartServiceIntent = Intent(applicationContext, WallpaperService::class.java)
         val restartServicePendingIntent = PendingIntent.getService(
-            applicationContext, 1, restartServiceIntent, PendingIntent.FLAG_IMMUTABLE
+            applicationContext, 1, restartServiceIntent,
+            PendingIntent.FLAG_IMMUTABLE
         )
-        val alarmService = applicationContext.getSystemService(Context.ALARM_SERVICE) as AlarmManager
-        alarmService.setExactAndAllowWhileIdle(
+        
+        val alarmManager = getSystemService(Context.ALARM_SERVICE) as AlarmManager
+        alarmManager.setExact(
             AlarmManager.ELAPSED_REALTIME,
             SystemClock.elapsedRealtime() + 1000,
             restartServicePendingIntent
         )
     }
 
+    override fun onDestroy() {
+        super.onDestroy()
+        Log.d(Companion.TAG, "Service onDestroy")
+        
+        if (Companion.isServiceRunning) {
+            // Servis sistem tarafından kapatıldıysa ve hala çalışır durumdaysa
+            // yeniden başlat
+            val intent = Intent(applicationContext, WallpaperService::class.java)
+            intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            startService(intent)
+        }
+        
+        unregisterScreenStateReceiver()
+        handler.removeCallbacks(wallpaperRunnable)
+        releaseWakeLock()
+    }
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     private fun acquireWakeLock() {
         try {
-            Log.d(TAG, "Acquiring WakeLock")
+            Log.d(Companion.TAG, "Acquiring WakeLock")
             val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
             wakeLock = powerManager.newWakeLock(
                 PowerManager.PARTIAL_WAKE_LOCK,
@@ -82,139 +121,121 @@ class WallpaperService : Service() {
                 acquire()
             }
         } catch (e: Exception) {
-            Log.e(TAG, "Error acquiring WakeLock", e)
+            Log.e(Companion.TAG, "Error acquiring WakeLock", e)
         }
     }
 
-    private fun registerScreenReceiver() {
-        try {
-            screenReceiver?.let {
-                unregisterReceiver(it)
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error unregistering previous receiver", e)
-        }
-
-        screenReceiver = object : BroadcastReceiver() {
-            override fun onReceive(context: Context?, intent: Intent?) {
-                val action = intent?.action ?: return
-                val isScreenOn = action == Intent.ACTION_SCREEN_ON
-                if (isScreenOn) {
-                    Log.d(TAG, "Screen turned on - changing wallpaper")
-                    changeWallpaper()
+    private fun registerScreenStateReceiver() {
+        if (screenStateReceiver == null) {
+            screenStateReceiver = object : BroadcastReceiver() {
+                override fun onReceive(context: Context?, intent: Intent?) {
+                    if (intent?.action == Intent.ACTION_SCREEN_OFF && Companion.isServiceRunning) {
+                        // Ekran kapandığında hemen duvar kağıdını değiştir
+                        Thread {
+                            // Kısa bir bekleme ekleyelim ki ekran tam kapansın
+                            Thread.sleep(100)
+                            changeWallpaper()
+                        }.start()
+                    }
                 }
             }
+            val filter = IntentFilter().apply {
+                addAction(Intent.ACTION_SCREEN_OFF)
+                priority = IntentFilter.SYSTEM_HIGH_PRIORITY
+            }
+            registerReceiver(screenStateReceiver, filter)
         }
-        val filter = IntentFilter(Intent.ACTION_SCREEN_ON)
-        registerReceiver(screenReceiver, filter)
-        Log.d(TAG, "Screen receiver registered")
+    }
+
+    private fun unregisterScreenStateReceiver() {
+        screenStateReceiver?.let {
+            unregisterReceiver(it)
+            screenStateReceiver = null
+        }
     }
 
     private fun changeWallpaper() {
         try {
-            Log.d(TAG, "Changing wallpaper")
+            Log.d(Companion.TAG, "Changing wallpaper")
             val wallpaperManager = WallpaperManager.getInstance(this)
             val wallpapers = listOf(
-                "Ravi-1.png",
-                "Ravi-2.png",
-                "Ravi-3.png",
-                "Ravi-4.png",
-                "Ravi-5.png"
+                "1.png",
+                "2.png",
+                "3.png",
+                "4.png",
+                "5.png",
+                "6.png",
+                "7.png",
+                "8.png",
+                "9.png",
+                "10.png",
+                "11.png",
+                "12.png",
+                "13.png",
+                "14.png",
+                "15.png"
             )
             
             val randomWallpaper = wallpapers.random()
-            Log.d(TAG, "Selected wallpaper: $randomWallpaper")
+            Log.d(Companion.TAG, "Selected wallpaper: $randomWallpaper")
             
+            // Ekran boyutlarını al
+            val displayMetrics = resources.displayMetrics
+            val screenWidth = displayMetrics.widthPixels
+            val screenHeight = displayMetrics.heightPixels
+            
+            // Duvar kağıdını yükle
             val assetManager = assets
-            assetManager.open("wallpapers/$randomWallpaper").use { inputStream ->
-                wallpaperManager.setStream(inputStream, null, true, WallpaperManager.FLAG_LOCK)
+            val inputStream = assetManager.open("wallpapers/$randomWallpaper")
+            
+            // Bitmap'i oluştur ve boyutlarını al
+            val options = BitmapFactory.Options().apply {
+                inJustDecodeBounds = true
+            }
+            BitmapFactory.decodeStream(inputStream, null, options)
+            inputStream.reset()
+            
+            // Ölçekleme oranını hesapla
+            val widthRatio = options.outWidth.toFloat() / screenWidth
+            val heightRatio = options.outHeight.toFloat() / screenHeight
+            val scaleFactor = maxOf(widthRatio, heightRatio)
+            
+            // Resmi ölçeklendir
+            val finalOptions = BitmapFactory.Options().apply {
+                inSampleSize = scaleFactor.toInt().coerceAtLeast(1)
+                inPreferredConfig = Bitmap.Config.ARGB_8888
             }
             
-            Log.d(TAG, "Wallpaper changed successfully to $randomWallpaper")
+            val bitmap = BitmapFactory.decodeStream(inputStream, null, finalOptions)
+                ?: throw IllegalStateException("Failed to decode bitmap")
+            inputStream.close()
             
-            // Bildirimi güncelle
-            val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            notificationManager.notify(NOTIFICATION_ID, createNotification())
+            // Resmi ekran boyutuna ölçekle
+            val scaledBitmap = Bitmap.createScaledBitmap(
+                bitmap,
+                screenWidth,
+                screenHeight,
+                true
+            )
+            
+            try {
+                // Duvar kağıdını ayarla
+                wallpaperManager.setBitmap(
+                    scaledBitmap,
+                    null,
+                    true,
+                    WallpaperManager.FLAG_LOCK
+                )
+                Log.d(Companion.TAG, "Wallpaper changed successfully to $randomWallpaper")
+            } finally {
+                // Belleği temizle
+                bitmap.recycle()
+                scaledBitmap.recycle()
+            }
+            
         } catch (e: Exception) {
-            Log.e(TAG, "Error changing wallpaper", e)
+            Log.e(Companion.TAG, "Error changing wallpaper", e)
         }
-    }
-
-    private fun createNotificationChannelIfNeeded(): String {
-        val channelId = "wallpaper_service"
-        val isOreoOrLater = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
-        
-        if (isOreoOrLater) {
-            val channel = NotificationChannel(
-                channelId,
-                "Wallpaper Service",
-                NotificationManager.IMPORTANCE_MIN // En düşük önem seviyesi
-            ).apply {
-                lockscreenVisibility = Notification.VISIBILITY_SECRET // Kilit ekranında gizle
-                setShowBadge(false) // Uygulama ikonunda rozet gösterme
-                enableLights(false) // LED ışığını devre dışı bırak
-                enableVibration(false) // Titreşimi devre dışı bırak
-                setSound(null, null) // Sesi devre dışı bırak
-            }
-            
-            val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
-            notificationManager.createNotificationChannel(channel)
-        }
-        
-        return channelId
-    }
-
-    @Suppress("DEPRECATION")
-    private fun createNotificationBuilder(channelId: String): Notification.Builder {
-        val isOreoOrLater = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
-        val builder = if (isOreoOrLater) {
-            Notification.Builder(this, channelId)
-        } else {
-            Notification.Builder(this).apply {
-                setPriority(Notification.PRIORITY_MIN) // En düşük öncelik (Android O öncesi için)
-            }
-        }
-        return builder
-    }
-
-    private fun createNotification(): Notification {
-        val channelId = createNotificationChannelIfNeeded()
-        val builder = createNotificationBuilder(channelId)
-        val pendingIntent = createMainActivityPendingIntent()
-        val stopPendingIntent = createStopServicePendingIntent()
-
-        return builder
-            .setSmallIcon(android.R.drawable.ic_menu_gallery)
-            .setContentTitle("") // Boş başlık
-            .setContentText("") // Boş metin
-            .setOngoing(true)
-            .setContentIntent(pendingIntent)
-            .addAction(android.R.drawable.ic_menu_close_clear_cancel, "Stop", stopPendingIntent)
-            .setVisibility(Notification.VISIBILITY_SECRET) // Kilit ekranında gizle
-            .setShowWhen(false) // Zaman gösterme
-            .build()
-    }
-
-    private fun createMainActivityPendingIntent(): PendingIntent {
-        val intent = Intent(this, MainActivity::class.java)
-        return PendingIntent.getActivity(
-            this,
-            0,
-            intent,
-            PendingIntent.FLAG_IMMUTABLE
-        )
-    }
-
-    private fun createStopServicePendingIntent(): PendingIntent {
-        val stopIntent = Intent(this, WallpaperService::class.java).apply {
-            action = ACTION_STOP_SERVICE
-        }
-        return PendingIntent.getService(
-            this,
-            1,
-            stopIntent,
-            PendingIntent.FLAG_IMMUTABLE
-        )
     }
 
     private fun releaseWakeLock() {
@@ -222,36 +243,12 @@ class WallpaperService : Service() {
             try {
                 when {
                     lock.isHeld -> lock.release()
-                    else -> Log.d(TAG, "WakeLock is not held")
+                    else -> Log.d(Companion.TAG, "WakeLock is not held")
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Error releasing WakeLock", e)
+                Log.e(Companion.TAG, "Error releasing WakeLock", e)
             }
         }
-    }
-
-    private fun unregisterScreenReceiverSafely() {
-        screenReceiver?.let { receiver ->
-            try {
-                unregisterReceiver(receiver)
-            } catch (e: Exception) {
-                Log.e(TAG, "Error unregistering receiver", e)
-            }
-        }
-    }
-
-    override fun onDestroy() {
-        Log.d(TAG, "Service onDestroy")
-        super.onDestroy()
-        isServiceRunning = false
-        handler.removeCallbacks(wallpaperRunnable)
-        
-        releaseWakeLock()
-        unregisterScreenReceiverSafely()
-
-        // Servisi yeniden başlat
-        val intent = Intent(applicationContext, WallpaperService::class.java)
-        startServiceBasedOnVersion(intent)
     }
 
     private fun startServiceBasedOnVersion(intent: Intent) {
@@ -264,7 +261,12 @@ class WallpaperService : Service() {
 
     companion object {
         private const val TAG = "WallpaperService"
-        private const val NOTIFICATION_ID = 1
+        const val NOTIFICATION_ID = 1
+        const val CHANNEL_ID = "WallpaperServiceChannel"
         const val ACTION_STOP_SERVICE = "com.example.wallpaper_changer.STOP_SERVICE"
+
+        @Volatile
+        var isServiceRunning = false
+            private set
     }
 }
