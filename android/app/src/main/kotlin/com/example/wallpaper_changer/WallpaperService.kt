@@ -14,40 +14,262 @@ import android.app.PendingIntent
 import android.graphics.Color
 import android.util.Log
 import java.util.concurrent.TimeUnit
+import org.json.JSONArray
+import org.json.JSONObject
+import kotlin.random.Random
+import android.text.TextPaint
+import java.io.File
+import android.content.SharedPreferences
+import androidx.core.app.NotificationCompat
 
 class WallpaperService : Service() {
     private var wakeLock: PowerManager.WakeLock? = null
     private val handler = Handler(Looper.getMainLooper())
-    private var currentIndex = 0
+    private var hadisler: JSONArray? = null
+    private var usedIndices = mutableSetOf<Int>()
+    private lateinit var sharedPreferences: SharedPreferences
     private var screenStateReceiver: BroadcastReceiver? = null
 
-    data class Hadis(
-        val metin: String,
-        val kitap: String,
-        val bolum: String,
-        val numara: String
-    )
+    override fun onCreate() {
+        super.onCreate()
+        sharedPreferences = getSharedPreferences("wallpaper_service", Context.MODE_PRIVATE)
+        loadSavedIndices()
+        loadHadisler()
+        acquireWakeLock()
+        createNotificationChannel()
+        registerScreenStateReceiver()
+        startForeground(NOTIFICATION_ID, createNotification())
+        startWallpaperChange()
+        isServiceRunning = true
+    }
 
-    companion object {
-        const val TAG = "WallpaperService"
-        const val CHANNEL_ID = "WallpaperServiceChannel"
-        const val NOTIFICATION_ID = 1
-        const val ACTION_STOP_SERVICE = "com.example.wallpaper_changer.STOP_SERVICE"
-        var isServiceRunning = false
+    private fun loadSavedIndices() {
+        val savedIndicesStr = sharedPreferences.getString("used_indices", "")
+        if (!savedIndicesStr.isNullOrEmpty()) {
+            usedIndices = savedIndicesStr.split(",")
+                .mapNotNull { it.toIntOrNull() }
+                .toMutableSet()
+            Log.d(TAG, "Loaded ${usedIndices.size} used indices")
+        }
+    }
+
+    private fun saveUsedIndices() {
+        val indicesStr = usedIndices.joinToString(",")
+        sharedPreferences.edit().putString("used_indices", indicesStr).apply()
+        Log.d(TAG, "Saved ${usedIndices.size} used indices")
+    }
+
+    private fun registerScreenStateReceiver() {
+        screenStateReceiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                when (intent?.action) {
+                    Intent.ACTION_SCREEN_ON -> {
+                        Log.d(TAG, "Screen turned ON")
+                        // Ekran açıldığında hadisi değiştir
+                        changeWallpaper()
+                    }
+                    Intent.ACTION_SCREEN_OFF -> {
+                        Log.d(TAG, "Screen turned OFF")
+                    }
+                }
+            }
+        }
+
+        val filter = IntentFilter().apply {
+            addAction(Intent.ACTION_SCREEN_ON)
+            addAction(Intent.ACTION_SCREEN_OFF)
+        }
+        registerReceiver(screenStateReceiver, filter)
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        if (intent?.action == ACTION_STOP_SERVICE) {
+            stopSelf()
+            return START_NOT_STICKY
+        }
+
+        isServiceRunning = true
         
-        // Hadisler listesi
-        private val hadisler = listOf(
-            Hadis("En hayırlınız, Kur'an'ı öğrenen ve öğretendir.", "Buhari", "Fedailü'l-Kur'an", "21"),
-            Hadis("Kolaylaştırınız, zorlaştırmayınız. Müjdeleyiniz, nefret ettirmeyiniz.", "Buhari", "İlim", "11"),
-            Hadis("İnsanlara merhamet etmeyene Allah da merhamet etmez.", "Buhari", "Edeb", "27"),
-            Hadis("Güzel söz sadakadır.", "Buhari", "Edeb", "34"),
-            Hadis("Cennet annelerin ayakları altındadır.", "Nesai", "Cihad", "6"),
-            Hadis("Komşusu açken tok yatan bizden değildir.", "Buhari", "Edeb", "112"),
-            Hadis("İki günü eşit olan ziyandadır.", "Deylemi", "Firdevs", "5290"),
-            Hadis("İlim öğrenmek her Müslüman'a farzdır.", "İbn Mace", "Mukaddime", "17"),
-            Hadis("Mümin, mümin için birbirini destekleyen bir bina gibidir.", "Buhari", "Mezalim", "5"),
-            Hadis("Hiçbir baba, çocuğuna güzel terbiyeden daha üstün bir hediye veremez.", "Tirmizi", "Birr", "33")
-        )
+        // Bildirim oluştur
+        val notification = createNotification()
+        startForeground(NOTIFICATION_ID, notification)
+        
+        // İlk çalıştığında hemen duvar kağıdını değiştir
+        changeWallpaper()
+        
+        return START_STICKY
+    }
+
+    private fun loadHadisler() {
+        try {
+            val assetManager = applicationContext.assets
+            val inputStream = assetManager.open("hadisler.json")
+            val size = inputStream.available()
+            val buffer = ByteArray(size)
+            inputStream.read(buffer)
+            inputStream.close()
+            val json = String(buffer, Charsets.UTF_8)
+            
+            // JSON içeriğini kontrol et
+            Log.d(TAG, "Raw JSON content: $json")
+            
+            hadisler = JSONArray(json)
+            val hadisCount = hadisler?.length() ?: 0
+            Log.d(TAG, "Successfully loaded $hadisCount hadis")
+            
+            // İlk birkaç hadisi kontrol et
+            for (i in 0 until minOf(5, hadisCount)) {
+                val hadis = hadisler?.getJSONObject(i)
+                Log.d(TAG, "Hadis $i: ${hadis?.getString("metin")}")
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error loading hadisler", e)
+            e.printStackTrace()
+        }
+    }
+
+    private fun getRandomHadis(): Pair<String, String>? {
+        hadisler?.let { hadislerArray ->
+            val hadisCount = hadislerArray.length()
+            if (hadisCount == 0) {
+                Log.e(TAG, "No hadis available")
+                return null
+            }
+            
+            Log.d(TAG, "Total hadis count: $hadisCount")
+            Log.d(TAG, "Currently used indices: ${usedIndices.joinToString()}")
+            
+            // Tüm hadisler kullanıldıysa listeyi sıfırla
+            if (usedIndices.size >= hadisCount) {
+                usedIndices.clear()
+                Log.d(TAG, "All hadis used, resetting list")
+            }
+            
+            // Kullanılmamış rastgele bir hadis seç
+            var randomIndex: Int
+            var attempts = 0
+            do {
+                randomIndex = Random.nextInt(hadisCount)
+                attempts++
+                // Sonsuz döngüye girmemek için
+                if (attempts > 1000) {
+                    usedIndices.clear()
+                    Log.d(TAG, "Too many attempts, resetting list")
+                    break
+                }
+            } while (randomIndex in usedIndices)
+            
+            usedIndices.add(randomIndex)
+            saveUsedIndices()
+            
+            val hadis = hadislerArray.getJSONObject(randomIndex)
+            val metin = hadis.getString("metin")
+            val kaynak = hadis.getString("kaynak")
+            
+            Log.d(TAG, "Selected hadis index: $randomIndex")
+            Log.d(TAG, "Selected hadis text: $metin")
+            Log.d(TAG, "Total used indices after selection: ${usedIndices.size}")
+            
+            return Pair(metin, kaynak)
+        }
+        return null
+    }
+
+    private fun drawMultilineText(canvas: Canvas, text: String, paint: Paint, maxWidth: Float, startY: Float): Float {
+        val lines = ArrayList<String>()
+        val words = text.split(" ")
+        var currentLine = StringBuilder()
+        
+        // Metni satırlara böl
+        for (word in words) {
+            val testLine = if (currentLine.isEmpty()) word else "${currentLine} $word"
+            if (paint.measureText(testLine) <= maxWidth) {
+                currentLine.append(if (currentLine.isEmpty()) word else " $word")
+            } else {
+                if (currentLine.isNotEmpty()) {
+                    lines.add(currentLine.toString())
+                    currentLine = StringBuilder(word)
+                } else {
+                    lines.add(word)
+                }
+            }
+        }
+        if (currentLine.isNotEmpty()) {
+            lines.add(currentLine.toString())
+        }
+        
+        // Satırları çiz
+        var y = startY
+        val lineHeight = paint.fontSpacing
+        for (line in lines) {
+            canvas.drawText(line, canvas.width / 2f, y, paint)
+            y += lineHeight
+        }
+        
+        // Son satırın y pozisyonunu döndür
+        return y
+    }
+
+    private fun changeWallpaper() {
+        try {
+            val wallpaperManager = WallpaperManager.getInstance(applicationContext)
+            val metrics = resources.displayMetrics
+            
+            val width = metrics.widthPixels
+            val height = metrics.heightPixels
+            
+            val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+            val canvas = Canvas(bitmap)
+            
+            // Arka plan rengini siyah yap
+            canvas.drawColor(Color.BLACK)
+            
+            val hadis = getRandomHadis()
+            if (hadis == null) {
+                Log.e(TAG, "No hadis available")
+                return
+            }
+            
+            val (metin, kaynak) = hadis
+            
+            val typeface = Typeface.create("serif", Typeface.NORMAL)
+            
+            // Hadis metni için paint
+            val textPaint = Paint().apply {
+                color = Color.WHITE
+                isAntiAlias = true
+                textAlign = Paint.Align.CENTER
+                this.typeface = typeface
+                textSize = width * 0.045f
+            }
+            
+            // Kaynak metni için paint
+            val kaynakPaint = Paint().apply {
+                color = Color.WHITE
+                alpha = 128  // Yarı saydam
+                textAlign = Paint.Align.CENTER
+                isAntiAlias = true
+                this.typeface = typeface
+                textSize = width * 0.035f
+            }
+            
+            val padding = width * 0.1f
+            val maxWidth = width - (padding * 2)
+            
+            // Hadis metnini çiz ve yüksekliğini al
+            val hadisHeight = drawMultilineText(canvas, metin, textPaint, maxWidth, height * 0.4f)
+            
+            // Kaynağı hadisin hemen altına çiz (20dp boşluk bırak)
+            val kaynakY = hadisHeight + (20 * resources.displayMetrics.density)
+            canvas.drawText(kaynak, width / 2f, kaynakY, kaynakPaint)
+            
+            // Sadece kilit ekranı duvar kağıdını değiştir
+            wallpaperManager.setBitmap(bitmap, null, true, WallpaperManager.FLAG_LOCK)
+            Log.d(TAG, "Wallpaper changed successfully with hadis: $metin")
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "Error changing wallpaper", e)
+        }
     }
 
     private val wallpaperRunnable = object : Runnable {
@@ -61,233 +283,76 @@ class WallpaperService : Service() {
         }
     }
 
-    private fun changeWallpaper() {
-        try {
-            val wallpaperManager = WallpaperManager.getInstance(applicationContext)
-            val metrics = resources.displayMetrics
-            
-            // Ekran boyutlarını al
-            val width = metrics.widthPixels
-            val height = metrics.heightPixels
-            
-            // Siyah arka planlı bitmap oluştur
-            val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-            val canvas = Canvas(bitmap)
-            
-            // Arka planı siyah yap
-            canvas.drawColor(Color.BLACK)
-            
-            // Hadisi seç
-            val hadis = hadisler[currentIndex]
-            currentIndex = (currentIndex + 1) % hadisler.size
-            
-            // Yazı tipini ayarla - Serif kullan
-            val typeface = Typeface.create("serif", Typeface.NORMAL)
-            
-            // Ana metin için yazı stilini ayarla
-            val textPaint = Paint().apply {
-                color = Color.WHITE
-                isAntiAlias = true
-                textAlign = Paint.Align.CENTER
-                this.typeface = typeface
-            }
-            
-            // Kaynak için yazı stilini ayarla
-            val kaynakPaint = Paint().apply {
-                color = Color.WHITE
-                alpha = 128 // Yarı saydam
-                textAlign = Paint.Align.CENTER
-                isAntiAlias = true
-                this.typeface = typeface
-            }
-            
-            // Metin boyutunu ayarla
-            val baseTextSize = width * 0.06f // Tek bir punto boyutu
-            textPaint.textSize = baseTextSize
-            kaynakPaint.textSize = baseTextSize * 0.7f // Kaynak metni ana metnin %70'i kadar
-            
-            // Metni satırlara böl
-            val maxWidth = width * 0.85f // Biraz daha geniş alan
-            val words = hadis.metin.split(" ")
-            val lines = mutableListOf<String>()
-            var currentLine = StringBuilder()
-            
-            for (word in words) {
-                val testLine = if (currentLine.isEmpty()) word else "${currentLine} $word"
-                if (textPaint.measureText(testLine) <= maxWidth) {
-                    currentLine.append(if (currentLine.isEmpty()) word else " $word")
-                } else {
-                    lines.add(currentLine.toString())
-                    currentLine = StringBuilder(word)
-                }
-            }
-            lines.add(currentLine.toString())
-            
-            // Ana metni çiz
-            val lineHeight = textPaint.fontSpacing
-            val totalTextHeight = lineHeight * lines.size
-            var yPos = (height - totalTextHeight) / 2
-            
-            for (line in lines) {
-                canvas.drawText(line, width / 2f, yPos + lineHeight, textPaint)
-                yPos += lineHeight
-            }
-            
-            // Son satırın y pozisyonunu kaydet
-            val lastLineY = yPos
-            
-            // Kaynağı hadisin altına çiz - mesafeyi artır
-            val kaynakMetni = "(${hadis.kitap}, \"${hadis.bolum}\", ${hadis.numara})"
-            canvas.drawText(kaynakMetni, width / 2f, lastLineY + kaynakPaint.fontSpacing * 2f, kaynakPaint)
-            
-            // Duvar kağıdını ayarla
-            wallpaperManager.setBitmap(bitmap, null, true, WallpaperManager.FLAG_LOCK)
-            
-        } catch (e: Exception) {
-            Log.e(TAG, "Error in changeWallpaper", e)
+    private fun acquireWakeLock() {
+        val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
+        wakeLock = powerManager.newWakeLock(
+            PowerManager.PARTIAL_WAKE_LOCK,
+            "WallpaperService::WakeLock"
+        ).apply {
+            acquire(TimeUnit.DAYS.toMillis(365)) // 1 yıl boyunca wake lock'u tut
         }
     }
 
-    override fun onCreate() {
-        super.onCreate()
-        Log.d(TAG, "Service onCreate")
-        // Başlangıçta servis durumunu false yap
-        isServiceRunning = false
-        registerScreenStateReceiver()
-    }
-
-    private fun startService() {
-        Log.d(TAG, "Starting service")
-        isServiceRunning = true
-        acquireWakeLock()
-        handler.post(wallpaperRunnable)
-    }
-
-    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        Log.d(TAG, "Service onStartCommand")
-        
-        when (intent?.action) {
-            ACTION_STOP_SERVICE -> {
-                Log.d(TAG, "Stopping service")
-                unregisterScreenStateReceiver()
-                stopSelf()
-                isServiceRunning = false
-                return START_NOT_STICKY
+    private fun createNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                CHANNEL_ID,
+                "Wallpaper Service Channel",
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = "Duvar kağıdı değiştirme servisi"
+                setShowBadge(false)
+                lockscreenVisibility = Notification.VISIBILITY_PUBLIC
             }
-            else -> {
-                if (!isServiceRunning) {
-                    startService()
-                    registerScreenStateReceiver()
-                    isServiceRunning = true
-                }
-            }
+            
+            val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            notificationManager.createNotificationChannel(channel)
         }
-        
-        // Servisin otomatik olarak yeniden başlatılmasını sağla
-        return START_STICKY
     }
 
-    override fun onTaskRemoved(rootIntent: Intent?) {
-        super.onTaskRemoved(rootIntent)
-        Log.d(TAG, "Service onTaskRemoved - restarting service")
-        
-        // Uygulama kapatıldığında servisi yeniden başlat
-        val restartServiceIntent = Intent(applicationContext, WallpaperService::class.java)
-        val restartServicePendingIntent = PendingIntent.getService(
-            applicationContext, 1, restartServiceIntent,
+    private fun createNotification(): Notification {
+        val notificationIntent = Intent(this, MainActivity::class.java)
+        val pendingIntent = PendingIntent.getActivity(
+            this,
+            0,
+            notificationIntent,
             PendingIntent.FLAG_IMMUTABLE
         )
-        
-        val alarmManager = getSystemService(Context.ALARM_SERVICE) as AlarmManager
-        alarmManager.setExact(
-            AlarmManager.ELAPSED_REALTIME,
-            SystemClock.elapsedRealtime() + 1000,
-            restartServicePendingIntent
-        )
+
+        return NotificationCompat.Builder(this, CHANNEL_ID)
+            .setContentTitle("Hadis Duvar Kağıdı")
+            .setContentText("Duvar kağıdı servisi çalışıyor")
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setContentIntent(pendingIntent)
+            .setOngoing(true)
+            .build()
+    }
+
+    private fun startWallpaperChange() {
+        handler.post(wallpaperRunnable)
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        Log.d(TAG, "Service onDestroy")
-        
-        if (isServiceRunning) {
-            // Servis sistem tarafından kapatıldıysa ve hala çalışır durumdaysa
-            // yeniden başlat
-            val intent = Intent(applicationContext, WallpaperService::class.java)
-            intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
-            startService(intent)
-        }
-        
-        unregisterScreenStateReceiver()
+        wakeLock?.release()
         handler.removeCallbacks(wallpaperRunnable)
-        releaseWakeLock()
+        isServiceRunning = false
+        screenStateReceiver?.let {
+            unregisterReceiver(it)
+        }
+
+        // Servisi yeniden başlat
+        val intent = Intent(this, WallpaperService::class.java)
+        startService(intent)
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
-    private fun acquireWakeLock() {
-        try {
-            Log.d(TAG, "Acquiring WakeLock")
-            val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
-            wakeLock = powerManager.newWakeLock(
-                PowerManager.PARTIAL_WAKE_LOCK,
-                "WallpaperChanger::WakeLock"
-            ).apply {
-                setReferenceCounted(false)
-                acquire()
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error acquiring WakeLock", e)
-        }
-    }
-
-    private fun registerScreenStateReceiver() {
-        if (screenStateReceiver == null) {
-            screenStateReceiver = object : BroadcastReceiver() {
-                override fun onReceive(context: Context?, intent: Intent?) {
-                    if (intent?.action == Intent.ACTION_SCREEN_OFF && isServiceRunning) {
-                        // Ekran kapandığında hemen duvar kağıdını değiştir
-                        Thread {
-                            // Kısa bir bekleme ekleyelim ki ekran tam kapansın
-                            Thread.sleep(100)
-                            changeWallpaper()
-                        }.start()
-                    }
-                }
-            }
-            val filter = IntentFilter().apply {
-                addAction(Intent.ACTION_SCREEN_OFF)
-                priority = IntentFilter.SYSTEM_HIGH_PRIORITY
-            }
-            registerReceiver(screenStateReceiver, filter)
-        }
-    }
-
-    private fun unregisterScreenStateReceiver() {
-        screenStateReceiver?.let {
-            unregisterReceiver(it)
-            screenStateReceiver = null
-        }
-    }
-
-    private fun releaseWakeLock() {
-        wakeLock?.let { lock ->
-            try {
-                when {
-                    lock.isHeld -> lock.release()
-                    else -> Log.d(TAG, "WakeLock is not held")
-                }
-            } catch (e: Exception) {
-                Log.e(TAG, "Error releasing WakeLock", e)
-            }
-        }
-    }
-
-    private fun startServiceBasedOnVersion(intent: Intent) {
-        val isOreoOrLater = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
-        when {
-            isOreoOrLater -> startForegroundService(intent)
-            else -> startService(intent)
-        }
+    companion object {
+        const val TAG = "WallpaperService"
+        const val CHANNEL_ID = "WallpaperServiceChannel"
+        const val NOTIFICATION_ID = 1
+        const val ACTION_STOP_SERVICE = "com.example.wallpaper_changer.STOP_SERVICE"
+        var isServiceRunning = false
     }
 }
