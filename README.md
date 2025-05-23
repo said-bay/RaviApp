@@ -8,7 +8,6 @@ Ravi, Android cihazınızın kilit ekranı duvar kağıdını otomatik olarak de
 - **Tam Ekran Uyumluluk**: Tüm duvar kağıtları ekranınıza mükemmel şekilde uyum sağlar
 - **Arka Planda Sessiz Çalışma**: Bildirim çubuğunda görünmeden, sessizce çalışır
 - **Pil Dostu**: Optimize edilmiş kod yapısı sayesinde minimum pil tüketimi
-- **15 Farklı Duvar Kağıdı**: Özenle seçilmiş 15 farklı duvar kağıdı içerir
 
 ## Kullanım
 
@@ -40,7 +39,6 @@ Ravi, Android cihazınızın kilit ekranı duvar kağıdını otomatik olarak de
 
 ### v1.0.0
 - İlk sürüm
-- 15 yeni duvar kağıdı eklendi
 - Otomatik değişim özelliği
 - Bildirim olmadan çalışma
 - Tam ekran duvar kağıdı desteği
